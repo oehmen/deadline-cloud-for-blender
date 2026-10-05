@@ -5,12 +5,21 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import bpy
 from deadline.client.exceptions import DeadlineOperationError
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CompositorOutput:
+    """A compositor File Output node and its configured output directory."""
+
+    node_name: str
+    base_path: str
 
 
 def get_renderable_view_layers(saved_scene_name) -> list[str]:
@@ -76,6 +85,37 @@ def get_active_scene_name() -> str:
     which would otherwise raise a KeyError during job-template construction.
     """
     return bpy.context.scene.name
+
+
+def get_compositor_outputs(scene_name: str) -> list[CompositorOutput]:
+    """Return active compositor File Output nodes and their configured directories."""
+    scene = bpy.data.scenes[scene_name]
+    node_tree = (
+        scene.compositing_node_group
+        if bpy.app.version >= (5, 0, 0)
+        else scene.node_tree
+    )
+
+    if not scene.use_nodes or node_tree is None:
+        return []
+
+    outputs: list[CompositorOutput] = []
+    for node in node_tree.nodes:
+        if node.bl_idname != "CompositorNodeOutputFile" or node.mute:
+            continue
+
+        raw_path = getattr(node, "directory", None) or getattr(node, "base_path", None)
+        if not raw_path:
+            continue
+
+        outputs.append(
+            CompositorOutput(
+                node_name=node.name,
+                base_path=os.path.normpath(bpy.path.abspath(raw_path)),
+            )
+        )
+
+    return outputs
 
 
 def get_frames() -> str:

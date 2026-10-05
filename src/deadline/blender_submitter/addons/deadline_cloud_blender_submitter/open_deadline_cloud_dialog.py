@@ -72,6 +72,7 @@ def create_deadline_dialog(parent=None) -> SubmitJobToDeadlineDialog:
 
     # Set settings dependent on scene.
     settings.name = bu.get_scene_name()
+    settings.scene_name = bpy.context.scene.name
     settings.project_path = bpy.context.blend_data.filepath
     settings.frame_list = bu.get_frames()
 
@@ -86,6 +87,15 @@ def create_deadline_dialog(parent=None) -> SubmitJobToDeadlineDialog:
 
     # Load and set sticky settings, if any.
     settings.load_sticky_settings(settings.project_path)
+    if settings.scene_name not in bpy.data.scenes:
+        settings.scene_name = bpy.context.scene.name
+
+    compositor_outputs = bu.get_compositor_outputs(settings.scene_name)
+    output_directories = set(settings.output_directories)
+    if settings.output_path:
+        output_directories.add(settings.output_path)
+    output_directories.update(output.base_path for output in compositor_outputs)
+    settings.output_directories = sorted(output_directories)
 
     settings.current_layer_selectable_cameras = [settings.camera_selection]
     settings.all_layer_selectable_cameras = [settings.camera_selection]
@@ -213,6 +223,14 @@ def _ui_settings_to_submitter_settings(
     """
     frame_list = settings.frame_list if settings.override_frame_range else bu.get_frames()
     width, height = bpy.context.scene.render.resolution_x, bpy.context.scene.render.resolution_y
+    compositor_outputs = [
+        {"node_name": output.node_name, "base_path": output.base_path}
+        for output in bu.get_compositor_outputs(settings.scene_name)
+    ]
+    output_directories = set(settings.output_directories)
+    if settings.output_path:
+        output_directories.add(settings.output_path)
+    output_directories.update(output["base_path"] for output in compositor_outputs)
 
     return BlenderSubmitterSettings(
         job_name=settings.name,
@@ -223,7 +241,7 @@ def _ui_settings_to_submitter_settings(
         override_frame_range=settings.override_frame_range,
         input_filenames=list(settings.input_filenames),
         input_directories=list(settings.input_directories),
-        output_directories=list(settings.output_directories),
+        output_directories=sorted(output_directories),
         renderer_name=settings.renderer_name,
         scene_name=settings.scene_name,
         view_layer_selection=settings.view_layer_selection,
@@ -234,6 +252,7 @@ def _ui_settings_to_submitter_settings(
         enable_gpu=settings.enable_gpu,
         gpu_device=settings.gpu_device,
         ocio_config_path=settings.ocio_config_path,
+        compositor_outputs=compositor_outputs,
         include_adaptor_wheels=settings.include_adaptor_wheels,
     )
 
@@ -281,6 +300,7 @@ def _create_bundle_internal(
     parameter_values = submitter.get_parameter_values(
         submitter_settings, cast("list[dict[str, Any]]", queue_parameters)
     )
+    asset_references.output_directories.update(submitter_settings.output_directories)
 
     # Write the job bundle files.
     job_bundle_path = Path(job_bundle_dir)
