@@ -403,8 +403,8 @@ def _fill_step_template(
     }
     for index, output in enumerate(settings.compositor_outputs):
         updated_init_data[f"compositor_output_node_{index}"] = output["node_name"]
-        updated_init_data[f"compositor_output_dir_{index}"] = "{{{{Param.CompositorOutputDir{}}}}}".format(
-            index
+        updated_init_data[f"compositor_output_dir_{index}"] = (
+            f"{{{{Param.CompositorOutputDir{index}}}}}"
         )
 
     init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]

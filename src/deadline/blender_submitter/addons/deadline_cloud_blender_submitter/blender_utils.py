@@ -90,11 +90,12 @@ def get_active_scene_name() -> str:
 def get_compositor_outputs(scene_name: str) -> list[CompositorOutput]:
     """Return active compositor File Output nodes and their configured directories."""
     scene = bpy.data.scenes[scene_name]
-    node_tree = (
-        scene.compositing_node_group
-        if bpy.app.version >= (5, 0, 0)
-        else scene.node_tree
-    )
+    # Blender 5.0 renamed scene.node_tree to scene.compositing_node_group.
+    # Detect the attribute instead of comparing bpy.app.version, so this also
+    # works when bpy is mocked in unit tests.
+    node_tree = getattr(scene, "compositing_node_group", None)
+    if node_tree is None:
+        node_tree = getattr(scene, "node_tree", None)
 
     if not scene.use_nodes or node_tree is None:
         return []
