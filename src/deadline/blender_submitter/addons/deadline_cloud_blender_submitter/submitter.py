@@ -16,6 +16,7 @@ from . import ocio_utils as ocio
 from .blender_utils import (
     classify_auto_detected_paths,
     get_active_scene_name,
+    get_compositor_outputs,
     get_frames,
     get_render_engine,
     get_renderable_cameras,
@@ -72,6 +73,7 @@ class BlenderSubmitter(BaseSubmitter):
 
         settings.input_filenames = [bpy.data.filepath] if bpy.data.filepath else []
         settings.output_directories = [settings.output_path] if settings.output_path else []
+        self._refresh_compositor_outputs(settings)
 
         # Default to rendering all renderable view layers (empty selection),
         # matching the dialog's default. _resolve_view_layer_names expands this.
@@ -105,6 +107,7 @@ class BlenderSubmitter(BaseSubmitter):
         # The builders read BlenderSubmitterSettings directly (no UISettings
         # translation); at runtime this is always that concrete type.
         blender_settings = cast("BlenderSubmitterSettings", settings)
+        self._refresh_compositor_outputs(blender_settings)
         view_layers = self._resolve_view_layer_names(settings)
         common_layer_settings = self._build_common_layer_settings(settings)
 
@@ -118,6 +121,7 @@ class BlenderSubmitter(BaseSubmitter):
         queue_parameters: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         blender_settings = cast("BlenderSubmitterSettings", settings)
+        self._refresh_compositor_outputs(blender_settings)
         common_layer_settings = self._build_common_layer_settings(settings)
 
         # The unified ABC types queue_parameters as list[dict]; the native
@@ -128,6 +132,18 @@ class BlenderSubmitter(BaseSubmitter):
             common_layer_settings,
             cast(list[JobParameter], queue_parameters),
         )
+
+    @staticmethod
+    def _refresh_compositor_outputs(settings: BlenderSubmitterSettings) -> None:
+        settings.compositor_outputs = [
+            {"node_name": output.node_name, "base_path": output.base_path}
+            for output in get_compositor_outputs(settings.scene_name)
+        ]
+        output_directories = set(settings.output_directories)
+        if settings.output_path:
+            output_directories.add(settings.output_path)
+        output_directories.update(output["base_path"] for output in settings.compositor_outputs)
+        settings.output_directories = sorted(output_directories)
 
     def _build_common_layer_settings(self, settings: BaseSubmitterSettings):
         """Construct CommonLayerSettings from the unified settings."""
@@ -220,6 +236,7 @@ class BlenderSubmitter(BaseSubmitter):
         # set; a malformed/unreadable config raises inside PyOpenColorIO — log
         # and continue rather than block submission, but don't swallow silently.
         blender_settings = cast(BlenderSubmitterSettings, settings)
+        self._refresh_compositor_outputs(blender_settings)
         try:
             referenced_dirs = ocio.get_current_ocio_referenced_dirs(
                 blender_settings.ocio_config_path
@@ -240,5 +257,5 @@ class BlenderSubmitter(BaseSubmitter):
         return AssetReferences(
             input_filenames=input_filenames,
             input_directories=input_directories,
-            output_directories=set(settings.output_directories),
+            output_directories=set(blender_settings.output_directories),
         )

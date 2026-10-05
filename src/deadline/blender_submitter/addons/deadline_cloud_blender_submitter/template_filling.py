@@ -191,9 +191,28 @@ class BlenderSubmitterSettings(BaseSubmitterSettings):
     gpu_device: str = "NONE"
     ocio_config_path: str = ""
     description: str = ""
+    compositor_outputs: list[dict[str, str]] = field(default_factory=list)
 
     # developer option
     include_adaptor_wheels: bool = False
+
+
+def _add_compositor_output_parameters(
+    job_template: dict,
+    compositor_outputs: list[dict[str, str]],
+) -> None:
+    for index, output in enumerate(compositor_outputs):
+        job_template["parameterDefinitions"].append(
+            {
+                "name": f"CompositorOutputDir{index}",
+                "type": "PATH",
+                "objectType": "DIRECTORY",
+                "dataFlow": "OUT",
+                "description": (
+                    f"Output directory for compositor File Output node '{output['node_name']}'."
+                ),
+            }
+        )
 
 
 def fill_job_template(
@@ -243,6 +262,8 @@ def fill_job_template(
     # If an OCIO config file is set, we will have to add a job parameter and environment for it.
     if settings.ocio_config_path:
         _add_ocio_template_data(job_template)
+
+    _add_compositor_output_parameters(job_template, settings.compositor_outputs)
 
     # For each layer, create a step based on the default step template.
     steps = []
@@ -380,6 +401,12 @@ def _fill_step_template(
             common_layer_settings.image_height_parameter_name or "ImageHeight"
         ),
     }
+    for index, output in enumerate(settings.compositor_outputs):
+        updated_init_data[f"compositor_output_node_{index}"] = output["node_name"]
+        updated_init_data[f"compositor_output_dir_{index}"] = "{{{{Param.CompositorOutputDir{}}}}}".format(
+            index
+        )
+
     init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]
     d = decode(init_data["data"])
     d.update(updated_init_data)
@@ -450,6 +477,9 @@ def get_parameter_values(
             "The following queue parameters conflict with the Blender job parameters:\n"
             + f"{', '.join(overlap)}"
         )
+
+    for index, output in enumerate(settings.compositor_outputs):
+        params.append({"name": f"CompositorOutputDir{index}", "value": output["base_path"]})
 
     # If specified, add the parameter value for OCIO here
     if settings.ocio_config_path:
