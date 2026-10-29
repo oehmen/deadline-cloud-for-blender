@@ -50,6 +50,12 @@ class BlenderClient(ClientInterface):
 
     def set_renderer(self, renderer: dict):
         render_handler = get_render_handler(renderer["render_engine"])
+        # Give the handler access to the session's path mapping so it can remap
+        # the scene's external file references (linked libraries, images, ...)
+        # after opening the file. These references live inside the .blend file
+        # and are not Deadline Cloud PATH job parameters, so they are not mapped
+        # automatically.
+        render_handler.map_path = self.map_path
         self.actions.update(render_handler.action_dict)
 
     def close(self, args: Optional[dict] = None) -> None:
