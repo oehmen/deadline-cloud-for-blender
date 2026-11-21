@@ -118,6 +118,13 @@ steps:
             - '{{Session.WorkingDirectory}}/connection.json'
             - --init-data
             - file://{{Env.File.initData}}
+            # Hand the session's path mapping rules to the adaptor so it can
+            # remap the scene's external references (linked libraries, images,
+            # ...) onto the worker's filesystem. Without this the adaptor
+            # receives no rules and absolute asset paths authored on another
+            # OS/mount fail to resolve (missing textures / "pink" renders).
+            - --path-mapping-rules
+            - file://{{Session.PathMappingRulesFile}}
           cancelation:
             mode: NOTIFY_THEN_TERMINATE
           timeout: 3720

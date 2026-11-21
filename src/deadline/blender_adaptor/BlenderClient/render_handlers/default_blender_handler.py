@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import cast, Optional
+from typing import Callable, cast, Optional
 
 import bpy  # type: ignore
 
@@ -41,6 +41,12 @@ class DefaultBlenderHandler:
         self.output_file_name = None
         self.format = None
         self.view_layer_name = ""
+
+        # Optional path-mapping callable, injected by the BlenderClient
+        # (ClientInterface.map_path). When set, it takes a path and returns the
+        # worker-local path according to the session's path mapping rules. Used
+        # to remap the scene's external file references after the file is opened.
+        self.map_path: Optional[Callable[[str], str]] = None
 
         _logger.debug(f"Initialized {self.__class__.__name__}")
 
@@ -226,6 +232,90 @@ class DefaultBlenderHandler:
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"The scene file '{file_path}' does not exist")
         bpy.ops.wm.open_mainfile(filepath=file_path)
+
+        # The scene_file parameter is a PATH job parameter, so Deadline Cloud
+        # has already mapped it to its worker-local location. The paths *inside*
+        # the scene (linked libraries, images, caches, ...) are stored in the
+        # .blend file itself and are NOT job parameters, so Deadline Cloud does
+        # not touch them. On a worker whose OS/mounts differ from where the scene
+        # was authored (e.g. a Windows "X:\\" path rendered on a Linux worker that
+        # mounts the share at "/mnt/projects"), those references do not resolve
+        # and the render loses its linked assets and textures. Apply the session's
+        # path mapping rules to them here, after the file is open.
+        self._remap_external_paths()
+
+    def _remap_external_paths(self) -> None:
+        """Remap the open scene's external file references using the adaptor's
+        path mapping rules.
+
+        Blender stores asset references (linked libraries, images, caches, sounds,
+        movie clips, volumes, fonts) inside the .blend file. These are not Deadline
+        Cloud PATH job parameters, so they are not remapped automatically; Blender
+        falls back to its own naive drive-letter conversion (e.g. ``X:\\`` -> ``/x/``)
+        which does not exist on the worker. This rewrites each absolute reference
+        through ``self.map_path`` (the session's path mapping rules) and reloads
+        libraries and images so the remapped paths take effect.
+
+        Does nothing if no path mapper was injected. Relative paths (``//...``) and
+        paths unchanged by the rules are left untouched, so this is a no-op when the
+        scene is already portable or no mapping applies.
+        """
+        map_path = self.map_path
+        if map_path is None:
+            _logger.debug("No path mapper available; skipping external path remap.")
+            return
+
+        def _remap_one(datablock) -> bool:
+            """Remap a single datablock's filepath in place. Returns True if changed."""
+            try:
+                original = datablock.filepath
+            except AttributeError:
+                return False
+            # Empty, packed, or relative (//) references need no mapping: relative
+            # paths resolve against the (already mapped) .blend location on any host.
+            if not original or original.startswith("//"):
+                return False
+            try:
+                mapped = map_path(bpy.path.abspath(original))
+            except Exception as exc:  # pragma: no cover - mapping is best-effort
+                _logger.warning(f"Could not map path '{original}': {exc}")
+                return False
+            if mapped and mapped != original:
+                datablock.filepath = mapped
+                _logger.debug(f"Remapped '{original}' -> '{mapped}'")
+                return True
+            return False
+
+        # Libraries first: linked .blend files must be remapped and reloaded so the
+        # data they provide (and any nested library paths) resolve on the worker.
+        libraries_changed = False
+        for library in bpy.data.libraries:
+            if _remap_one(library):
+                libraries_changed = True
+        if libraries_changed:
+            for library in bpy.data.libraries:
+                try:
+                    library.reload()
+                except Exception as exc:  # pragma: no cover - reload is best-effort
+                    _logger.warning(f"Could not reload library '{library.filepath}': {exc}")
+
+        # Other external data blocks that carry a filepath.
+        for collection in (
+            bpy.data.images,
+            bpy.data.cache_files,
+            bpy.data.sounds,
+            bpy.data.movieclips,
+            getattr(bpy.data, "volumes", ()),
+            bpy.data.fonts,
+        ):
+            for datablock in collection:
+                changed = _remap_one(datablock)
+                # Images cache their pixels; force a reload so the mapped file is read.
+                if changed and hasattr(datablock, "reload"):
+                    try:
+                        datablock.reload()
+                    except Exception as exc:  # pragma: no cover - reload is best-effort
+                        _logger.warning(f"Could not reload datablock '{datablock.filepath}': {exc}")
 
     def set_gpu_device(self, data: dict) -> None:
         """
